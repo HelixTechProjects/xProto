@@ -14,7 +14,7 @@ use crate::parser::{
     read_file_as_string,
 };
 
-use anyhow::Ok;
+use std::result::Result::Ok;
 use regex::Regex;
 
 use super::model::{
@@ -53,8 +53,8 @@ pub(crate) enum ParserError {
     StrLitDecodeError(#[source] StrLitDecodeError),
     #[error("lexer error: {0}")]
     LexerError(#[source] LexerError),
-    #[error("{} 行 {} 列 {} 字段序号重复 ", .0.line, .0.col, .1)]
-    DuplicateNumber(Loc, String),
+    // #[error("{} 行 {} 列 {} 字段序号重复 ", .0.line, .0.col, .1)]
+    // DuplicateNumber(Loc, String),
     // #[error("{} 行 {} 列 {} 文件: {} 不存在", .0.line, .0.col, .1, .1)]
     // NotFound(Loc, String),
     #[error("{} 行 {} 列 {} 读取文件文件: {} 出错", .0.line, .0.col, .1, .1)]
@@ -891,12 +891,44 @@ impl<'a> Parser<'a> {
         self.scope_stack.push(ParseScope::Enum(String::default()));
 
         let result = if self.tokenizer.next_ident_if_eq("enum")? {
-            let name = self.tokenizer.next_ident()?.to_owned();
             let annotation = self.annotation.take();
+
+            // 错误恢复：解析 enum 名称
+            let name_result = self.tokenizer.next_ident();
+            if let Err(err) = name_result {
+                let start_loc = err.loc();
+                // 跳过到下一个 { 然后跳过整个块
+                self.tokenizer.skip_symbol_until_eq('{');
+                let _ = self.tokenizer.skip_pair_symbol('}');
+                self.store_error_diagnostics(
+                    "语法错误: enum 名称应为标识符".to_string(),
+                    start_loc,
+                    self.tokenizer.loc(),
+                );
+                self.scope_stack.pop();
+                return Ok(None);
+            }
+            let name = name_result.unwrap().to_owned();
+
             enum_name = name.clone();
             self.scope_stack.pop();
-
             self.scope_stack.push(ParseScope::Enum(name.clone()));
+
+            // 错误恢复：期望 { 开始 enum body
+            let brace_result = self.tokenizer.next_symbol_expect_eq('{', "enum");
+            if let Err(err) = brace_result {
+                let start_loc = err.loc();
+                // 尝试找到 { 并跳过整个块
+                self.tokenizer.skip_symbol_until_eq('{');
+                let _ = self.tokenizer.skip_pair_symbol('}');
+                self.store_error_diagnostics(
+                    format!("语法错误: enum '{}' 之后应为 {{", name),
+                    start_loc,
+                    self.tokenizer.loc(),
+                );
+                self.scope_stack.pop();
+                return Ok(None);
+            }
 
             let mut values = Vec::new();
             let mut options = Vec::new();
@@ -905,40 +937,59 @@ impl<'a> Parser<'a> {
 
             let mut field_num_set = HashSet::new();
 
-            self.tokenizer.next_symbol_expect_eq('{', "enum")?;
-            while self.tokenizer.lookahead_if_symbol()? != Some('}') {
-                if let Some(annotation) = self.next_annotation_opt()? {
-                    self.annotation = Some(annotation);
-                    continue;
+            // 解析 enum body（带错误恢复）
+            while self.tokenizer.lookahead_if_symbol().unwrap_or(None) != Some('}') {
+                match self.next_annotation_opt() {
+                    Ok(Some(annotation)) => {
+                        self.annotation = Some(annotation);
+                        continue;
+                    }
+                    _ => {}
                 }
 
                 // emptyStatement
-                if self.tokenizer.next_symbol_if_eq(';')? {
+                if self.tokenizer.next_symbol_if_eq(';').unwrap_or(false) {
                     continue;
                 }
 
-                if let Some((field_nums, field_names)) = self.next_reserved_opt()? {
-                    reserved_nums.extend(field_nums);
-                    reserved_names.extend(field_names);
-                    continue;
+                match self.next_reserved_opt() {
+                    Ok(Some((field_nums, field_names))) => {
+                        reserved_nums.extend(field_nums);
+                        reserved_names.extend(field_names);
+                        continue;
+                    }
+                    _ => {}
                 }
 
-                if let Some(o) = self.next_option_opt()? {
-                    options.push(o);
-                    continue;
+                match self.next_option_opt() {
+                    Ok(Some(o)) => {
+                        options.push(o);
+                        continue;
+                    }
+                    _ => {}
                 }
 
-                let num_field = self.next_enum_field()?;
-
-                if field_num_set.contains(&num_field.number) {
-                    return Err(ParserError::DuplicateNumber(loc, num_field.name.clone()).into());
+                // 尝试解析 enum 字段，失败时跳过
+                match self.next_enum_field() {
+                    Ok(num_field) => {
+                        if !field_num_set.contains(&num_field.number) {
+                            field_num_set.insert(num_field.number);
+                            values.push(num_field);
+                        }
+                    }
+                    Err(e) => {
+                        let start_loc = self.tokenizer.loc();
+                        self.skip_to_sync_point_in_message();
+                        self.store_error_diagnostics(
+                            format!("enum 字段解析错误: {}", e),
+                            start_loc,
+                            self.tokenizer.loc(),
+                        );
+                    }
                 }
-
-                field_num_set.insert(num_field.number);
-
-                values.push(num_field);
             }
-            self.tokenizer.next_symbol_expect_eq('}', "enum")?;
+
+            let _ = self.tokenizer.next_symbol_expect_eq('}', "enum");
             let enumeration = Enumeration {
                 name,
                 values,
@@ -961,110 +1012,210 @@ impl<'a> Parser<'a> {
             Ok(None)
         };
 
-        let scope = self.scope_stack.pop().unwrap();
-        assert_eq!(scope, ParseScope::Enum(enum_name));
+        let scope = self.scope_stack.pop();
+        if result.is_ok() && scope.is_some() {
+            assert_eq!(scope.unwrap(), ParseScope::Enum(enum_name));
+        }
 
         result
     }
 
     // Message definition
 
-    // messageBody = "{" { field | enum | message | extend | extensions | group |
-    //               option | oneof | mapField | reserved | emptyStatement } "}"
-    fn next_message_body(&mut self, mode: MessageBodyParseMode) -> anyhow::Result<MessageBody> {
+    // // messageBody = "{" { field | enum | message | extend | extensions | group |
+    // //               option | oneof | mapField | reserved | emptyStatement } "}"
+    // fn next_message_body(&mut self, mode: MessageBodyParseMode) -> anyhow::Result<MessageBody> {
+    //     let mut r = MessageBody::default();
+    //     self.tokenizer.next_symbol_expect_eq('{', "message body")?;
+    //     // let start_loc = self.tokenizer.loc();
+    //     // let ret = self.tokenizer.next_symbol_expect_eq('{', "message body");
+    //     // if ret.is_err() {
+    //     //     let _ = self.tokenizer.skip_pair_symbol('}');
+    //     //     self.store_error_diagnostics(
+    //     //         "语法错误: 结构体名之后应为 {".to_string(),
+    //     //         start_loc,
+    //     //         self.tokenizer.loc(),
+    //     //     );
+    //     //     return Ok(r);
+    //     // }
+    //     //
+
+    //     let mut field_num_set = HashSet::new();
+    //     while self.tokenizer.lookahead_if_symbol()? != Some('}') {
+    //         let loc = self.tokenizer.lookahead_loc();
+    //         if let Some(annotation) = self.next_annotation_opt()? {
+    //             self.annotation = Some(annotation);
+    //             continue;
+    //         }
+    //         // emptyStatement
+    //         if self.tokenizer.next_symbol_if_eq(';')? {
+    //             continue;
+    //         }
+    //         //
+    //         if mode.is_most_non_fields_allowed() {
+    //             //
+    //             if let Some((field_nums, field_names)) = self.next_reserved_opt()? {
+    //                 r.reserved_nums.extend(field_nums);
+    //                 r.reserved_names.extend(field_names);
+    //                 continue;
+    //             }
+    //             if let Some(nested_message) = self.next_message_opt()? {
+    //                 r.messages.push(nested_message);
+    //                 continue;
+    //             }
+
+    //             if let Some(nested_enum) = self.next_enum_opt()? {
+    //                 r.enums.push(nested_enum);
+    //                 continue;
+    //             }
+    //         } else {
+    //             self.tokenizer.next_ident_if_eq_error("reserved")?;
+    //             self.tokenizer.next_ident_if_eq_error("oneof")?;
+    //             self.tokenizer.next_ident_if_eq_error("extend")?;
+    //             self.tokenizer.next_ident_if_eq_error("message")?;
+    //             self.tokenizer.next_ident_if_eq_error("enum")?;
+    //         }
+
+    //         // if mode.is_extensions_allowed() {
+    //         //     if let Some(extension_ranges) = self.next_extensions_opt()? {
+    //         //         r.extension_ranges.extend(extension_ranges);
+    //         //         continue;
+    //         //     }
+    //         // } else {
+    //         self.tokenizer.next_ident_if_eq_error("extensions")?;
+    //         // }
+
+    //         if mode.is_option_allowed() {
+    //             if let Some(option) = self.next_option_opt()? {
+    //                 r.options.push(option);
+    //                 continue;
+    //             }
+    //         } else {
+    //             self.tokenizer.next_ident_if_eq_error("option")?;
+    //         }
+
+    //         let field = FieldOrOneOf::Field(self.next_field(mode)?);
+
+    //         if let FieldOrOneOf::Field(ref field) = field {
+    //             if field_num_set.contains(&field.number) {
+    //                 return Err(ParserError::DuplicateNumber(loc, field.name.clone()).into());
+    //             }
+    //             field_num_set.insert(field.number);
+    //         }
+    //         r.fields.push(WithLoc { t: field, loc });
+    //     }
+
+    //     self.tokenizer.next_symbol_expect_eq('}', "message body")?;
+
+    //     // if ret.is_err() {
+    //     //     let _ = self.tokenizer.skip_pair_symbol('}');
+    //     //     self.store_error_diagnostics(
+    //     //         "语法错误: 结构体名之后应 }".to_string(),
+    //     //         start_loc,
+    //     //         self.tokenizer.loc(),
+    //     //     );
+    //     //     return Ok(r);
+    //     // }
+
+    //     Ok(r)
+    // }
+
+    /// 带错误恢复的 message body 解析
+    fn next_message_body_with_recovery(&mut self, mode: MessageBodyParseMode) -> MessageBody {
         let mut r = MessageBody::default();
-        self.tokenizer.next_symbol_expect_eq('{', "message body")?;
-        // let start_loc = self.tokenizer.loc();
-        // let ret = self.tokenizer.next_symbol_expect_eq('{', "message body");
-        // if ret.is_err() {
-        //     let _ = self.tokenizer.skip_pair_symbol('}');
-        //     self.store_error_diagnostics(
-        //         "语法错误: 结构体名之后应为 {".to_string(),
-        //         start_loc,
-        //         self.tokenizer.loc(),
-        //     );
-        //     return Ok(r);
-        // }
-        //
+        // 注意：此时 { 已经被消费了
 
         let mut field_num_set = HashSet::new();
-        while self.tokenizer.lookahead_if_symbol()? != Some('}') {
+        while self.tokenizer.lookahead_if_symbol().unwrap_or(None) != Some('}') {
             let loc = self.tokenizer.lookahead_loc();
-            if let Some(annotation) = self.next_annotation_opt()? {
+
+            // 尝试解析，如果失败则跳过当前项
+            if let Ok(Some(annotation)) = self.next_annotation_opt() {
                 self.annotation = Some(annotation);
                 continue;
             }
+
             // emptyStatement
-            if self.tokenizer.next_symbol_if_eq(';')? {
+            if self.tokenizer.next_symbol_if_eq(';').unwrap_or(false) {
                 continue;
             }
-            //
+
+            // 尝试解析各种可能的元素，遇到错误时继续
             if mode.is_most_non_fields_allowed() {
-                //
-                if let Some((field_nums, field_names)) = self.next_reserved_opt()? {
+                if let Ok(Some((field_nums, field_names))) = self.next_reserved_opt() {
                     r.reserved_nums.extend(field_nums);
                     r.reserved_names.extend(field_names);
                     continue;
                 }
-                if let Some(nested_message) = self.next_message_opt()? {
+
+                // 嵌套 message（带错误恢复）
+                if let Ok(Some(nested_message)) = self.next_message_opt() {
                     r.messages.push(nested_message);
                     continue;
                 }
 
-                if let Some(nested_enum) = self.next_enum_opt()? {
+                // 嵌套 enum（带错误恢复）
+                if let Ok(Some(nested_enum)) = self.next_enum_opt() {
                     r.enums.push(nested_enum);
                     continue;
                 }
-            } else {
-                self.tokenizer.next_ident_if_eq_error("reserved")?;
-                self.tokenizer.next_ident_if_eq_error("oneof")?;
-                self.tokenizer.next_ident_if_eq_error("extend")?;
-                self.tokenizer.next_ident_if_eq_error("message")?;
-                self.tokenizer.next_ident_if_eq_error("enum")?;
             }
 
-            // if mode.is_extensions_allowed() {
-            //     if let Some(extension_ranges) = self.next_extensions_opt()? {
-            //         r.extension_ranges.extend(extension_ranges);
-            //         continue;
-            //     }
-            // } else {
-            self.tokenizer.next_ident_if_eq_error("extensions")?;
-            // }
+            // 跳过不允许的关键字
+            let _ = self.tokenizer.next_ident_if_eq_error("extensions");
 
             if mode.is_option_allowed() {
-                if let Some(option) = self.next_option_opt()? {
+                if let Ok(Some(option)) = self.next_option_opt() {
                     r.options.push(option);
                     continue;
                 }
-            } else {
-                self.tokenizer.next_ident_if_eq_error("option")?;
             }
 
-            let field = FieldOrOneOf::Field(self.next_field(mode)?);
-
-            if let FieldOrOneOf::Field(ref field) = field {
-                if field_num_set.contains(&field.number) {
-                    return Err(ParserError::DuplicateNumber(loc, field.name.clone()).into());
+            // 尝试解析字段，如果失败则跳过到下一个 ; 或 }
+            match self.next_field(mode) {
+                Ok(field_with_loc) => {
+                    if !field_num_set.contains(&field_with_loc.t.number) {
+                        field_num_set.insert(field_with_loc.t.number);
+                        r.fields.push(WithLoc { t: FieldOrOneOf::Field(field_with_loc), loc });
+                    }
                 }
-                field_num_set.insert(field.number);
+                Err(e) => {
+                    // 记录错误并跳过到下一个同步点
+                    let start_loc = self.tokenizer.loc();
+                    self.skip_to_sync_point_in_message();
+                    self.store_error_diagnostics(
+                        format!("字段解析错误: {}", e),
+                        start_loc,
+                        self.tokenizer.loc(),
+                    );
+                }
             }
-            r.fields.push(WithLoc { t: field, loc });
         }
 
-        self.tokenizer.next_symbol_expect_eq('}', "message body")?;
+        // 消费结束的 }
+        let _ = self.tokenizer.next_symbol_expect_eq('}', "message body");
 
-        // if ret.is_err() {
-        //     let _ = self.tokenizer.skip_pair_symbol('}');
-        //     self.store_error_diagnostics(
-        //         "语法错误: 结构体名之后应 }".to_string(),
-        //         start_loc,
-        //         self.tokenizer.loc(),
-        //     );
-        //     return Ok(r);
-        // }
+        r
+    }
 
-        Ok(r)
+    /// 跳过到下一个同步点（; 或 }）
+    fn skip_to_sync_point_in_message(&mut self) {
+        while let Ok(true) = self.tokenizer.syntax_eof().map(|eof| !eof) {
+            // 检查当前 token
+            if let Ok(Some(sym)) = self.tokenizer.lookahead_if_symbol() {
+                if sym == ';' {
+                    // 消费 ; 并停止
+                    let _ = self.tokenizer.advance();
+                    break;
+                }
+                if sym == '}' {
+                    // 不消费 }，让调用者处理
+                    break;
+                }
+            }
+            // 消费当前 token
+            let _ = self.tokenizer.advance();
+        }
     }
 
     // message = "message" messageName messageBody
@@ -1079,12 +1230,44 @@ impl<'a> Parser<'a> {
         let result = if self.tokenizer.next_ident_if_eq("message")? {
             let annotation = self.annotation.take();
 
-            let name = self.tokenizer.next_ident()?;
+            // 错误恢复：解析 message 名称
+            let name_result = self.tokenizer.next_ident();
+            if let Err(err) = name_result {
+                let start_loc = err.loc();
+                // 跳过到下一个 { 然后跳过整个块
+                self.tokenizer.skip_symbol_until_eq('{');
+                let _ = self.tokenizer.skip_pair_symbol('}');
+                self.store_error_diagnostics(
+                    format!("语法错误: message 名称应为标识符"),
+                    start_loc,
+                    self.tokenizer.loc(),
+                );
+                self.scope_stack.pop();
+                return Ok(None);
+            }
+            let name = name_result.unwrap();
 
             message_name = name.clone();
             self.scope_stack.pop();
             self.scope_stack.push(ParseScope::Message(name.clone()));
 
+            // 错误恢复：期望 { 开始 message body
+            let brace_result = self.tokenizer.next_symbol_expect_eq('{', "message body");
+            if let Err(err) = brace_result {
+                let start_loc = err.loc();
+                // 尝试找到 { 并跳过整个块
+                self.tokenizer.skip_symbol_until_eq('{');
+                let _ = self.tokenizer.skip_pair_symbol('}');
+                self.store_error_diagnostics(
+                    format!("语法错误: message '{}' 之后应为 {{", name),
+                    start_loc,
+                    self.tokenizer.loc(),
+                );
+                self.scope_stack.pop();
+                return Ok(None);
+            }
+
+            // 解析 message body（带错误恢复）
             let MessageBody {
                 fields,
                 reserved_nums,
@@ -1094,7 +1277,7 @@ impl<'a> Parser<'a> {
                 options,
                 extensions,
                 extension_ranges,
-            } = self.next_message_body(MessageBodyParseMode::MessageProto3)?;
+            } = self.next_message_body_with_recovery(MessageBodyParseMode::MessageProto3);
 
             let message = Message {
                 name,
@@ -1117,8 +1300,10 @@ impl<'a> Parser<'a> {
             Ok(None)
         };
 
-        let scope = self.scope_stack.pop().unwrap();
-        assert_eq!(scope, ParseScope::Message(message_name));
+        let scope = self.scope_stack.pop();
+        if result.is_ok() && scope.is_some() {
+            assert_eq!(scope.unwrap(), ParseScope::Message(message_name));
+        }
 
         result
     }
@@ -1128,31 +1313,77 @@ impl<'a> Parser<'a> {
         let loc = self.tokenizer.lookahead_loc();
 
         let result = if self.tokenizer.next_ident_if_eq("event")? {
-            let name = self.tokenizer.next_ident()?.to_owned();
-
             let annotation = self.annotation.take();
 
-            self.tokenizer.next_symbol_expect_eq('{', "event body")?;
+            // 错误恢复：解析 event 名称
+            let name_result = self.tokenizer.next_ident();
+            if let Err(err) = name_result {
+                let start_loc = err.loc();
+                // 跳过到下一个 { 然后跳过整个块
+                self.tokenizer.skip_symbol_until_eq('{');
+                let _ = self.tokenizer.skip_pair_symbol('}');
+                self.store_error_diagnostics(
+                    "语法错误: event 名称应为标识符".to_string(),
+                    start_loc,
+                    self.tokenizer.loc(),
+                );
+                return Ok(None);
+            }
+            let name = name_result.unwrap().to_owned();
+
+            // 错误恢复：期望 { 开始 event body
+            let brace_result = self.tokenizer.next_symbol_expect_eq('{', "event body");
+            if let Err(err) = brace_result {
+                let start_loc = err.loc();
+                // 尝试找到 { 并跳过整个块
+                self.tokenizer.skip_symbol_until_eq('{');
+                let _ = self.tokenizer.skip_pair_symbol('}');
+                self.store_error_diagnostics(
+                    format!("语法错误: event '{}' 之后应为 {{", name),
+                    start_loc,
+                    self.tokenizer.loc(),
+                );
+                return Ok(None);
+            }
+
             let mut event_items = Vec::new();
-            while self.tokenizer.lookahead_if_symbol()? != Some('}') {
-                if let Some(annotation) = self.next_annotation_opt()? {
+            // 解析 event body（带错误恢复）
+            while self.tokenizer.lookahead_if_symbol().unwrap_or(None) != Some('}') {
+                if let Ok(Some(annotation)) = self.next_annotation_opt() {
                     self.annotation = Some(annotation);
                     continue;
                 }
-                if self.tokenizer.next_symbol_if_eq(';')? {
+                if self.tokenizer.next_symbol_if_eq(';').unwrap_or(false) {
                     continue;
                 }
                 let annotation_item = self.annotation.take();
-                let event_name = self.tokenizer.next_ident()?.to_owned();
-                self.tokenizer.next_symbol_expect_eq(';', "event")?;
-                event_items.push({
-                    EventItem {
-                        name: event_name,
-                        annotation: annotation_item,
+
+                // 尝试解析 event name
+                match self.tokenizer.next_ident() {
+                    Ok(event_name) => {
+                        // 期望 ; 结束
+                        if self.tokenizer.next_symbol_expect_eq(';', "event").is_ok() {
+                            event_items.push(EventItem {
+                                name: event_name.to_owned(),
+                                annotation: annotation_item,
+                            });
+                        } else {
+                            // 跳过到下一个同步点
+                            self.skip_to_sync_point_in_message();
+                        }
                     }
-                });
+                    Err(e) => {
+                        let start_loc = e.loc();
+                        self.skip_to_sync_point_in_message();
+                        self.store_error_diagnostics(
+                            format!("event 项解析错误: {}", e),
+                            start_loc,
+                            self.tokenizer.loc(),
+                        );
+                    }
+                }
             }
-            self.tokenizer.next_symbol_expect_eq('}', "event body")?;
+            let _ = self.tokenizer.next_symbol_expect_eq('}', "event body");
 
             let event = Event {
                 name,
@@ -1461,11 +1692,12 @@ impl<'a> Parser<'a> {
         if self.tokenizer.next_ident_if_eq("topic")? {
             let mut methods = Vec::new();
             let annotation = self.annotation.take();
-            // 处理1个错误
+            // 处理 { 缺失的错误
             let ret = self.tokenizer.next_symbol_expect_eq('{', "topic");
-            // 跳转到 第一个 {
             if let Err(err) = ret {
                 let start_loc = err.loc();
+                // 先尝试找到 { 再跳过整个块
+                self.tokenizer.skip_symbol_until_eq('{');
                 let _ = self.tokenizer.skip_pair_symbol('}');
                 self.store_error_diagnostics(
                     "语法错误: topic 之后应为 {".to_string(),
@@ -1476,25 +1708,35 @@ impl<'a> Parser<'a> {
                 return Ok(None);
             }
 
-            while self.tokenizer.lookahead_if_symbol()? != Some('}') {
-                if let Some(annotation) = self.next_annotation_opt()? {
+            // 解析 topic body（带错误恢复）
+            while self.tokenizer.lookahead_if_symbol().unwrap_or(None) != Some('}') {
+                if let Ok(Some(annotation)) = self.next_annotation_opt() {
                     self.annotation = Some(annotation);
                     continue;
                 }
 
-                let ret = self.next_topic_method_opt();
-                if ret.is_err() {
-                    continue;
+                // 尝试解析 method，失败时跳过
+                match self.next_topic_method_opt() {
+                    Ok(Some(method)) => {
+                        methods.push(method);
+                        continue;
+                    }
+                    Ok(None) => {
+                        // 无法解析，跳过当前 token
+                        let _ = self.tokenizer.advance();
+                    }
+                    Err(e) => {
+                        let start_loc = self.tokenizer.loc();
+                        self.skip_to_sync_point_in_message();
+                        self.store_error_diagnostics(
+                            format!("topic 方法解析错误: {}", e),
+                            start_loc,
+                            self.tokenizer.loc(),
+                        );
+                    }
                 }
-                let method = ret.unwrap();
-                if let Some(method) = method {
-                    methods.push(method);
-                    continue;
-                }
-
-                return Err(ParserError::IncorrectInput.into());
             }
-            self.tokenizer.next_symbol_expect_eq('}', "topic")?;
+            let _ = self.tokenizer.next_symbol_expect_eq('}', "topic");
             Ok(Some(WithLoc {
                 loc,
                 t: Topic {
@@ -1524,26 +1766,69 @@ impl<'a> Parser<'a> {
         if self.tokenizer.next_ident_if_eq("subscribe")? {
             let annotation = self.annotation.take();
 
-            let name = self.next_subscribe_name()?;
+            // 错误恢复：解析 subscribe 名称
+            let name_result = self.next_subscribe_name();
+            if let Err(_err) = name_result {
+                let start_loc = self.tokenizer.loc();
+                // 跳过到下一个 { 然后跳过整个块
+                self.tokenizer.skip_symbol_until_eq('{');
+                let _ = self.tokenizer.skip_pair_symbol('}');
+                self.store_error_diagnostics(
+                    "语法错误: subscribe 名称解析失败".to_string(),
+                    start_loc,
+                    self.tokenizer.loc(),
+                );
+                return Ok(None);
+            }
+            let name = name_result.unwrap();
+
+            // 错误恢复：期望 { 开始 subscribe body
+            let brace_result = self.tokenizer.next_symbol_expect_eq('{', "subscribe");
+            if let Err(err) = brace_result {
+                let start_loc = err.loc();
+                // 尝试找到 { 并跳过整个块
+                self.tokenizer.skip_symbol_until_eq('{');
+                let _ = self.tokenizer.skip_pair_symbol('}');
+                self.store_error_diagnostics(
+                    format!("语法错误: subscribe '{}' 之后应为 {{", name),
+                    start_loc,
+                    self.tokenizer.loc(),
+                );
+                return Ok(None);
+            }
 
             let mut methods = Vec::new();
 
-            self.tokenizer.next_symbol_expect_eq('{', "subscribe")?;
-
-            while self.tokenizer.lookahead_if_symbol()? != Some('}') {
-                if let Some(annotation) = self.next_annotation_opt()? {
+            // 解析 subscribe body（带错误恢复）
+            while self.tokenizer.lookahead_if_symbol().unwrap_or(None) != Some('}') {
+                if let Ok(Some(annotation)) = self.next_annotation_opt() {
                     self.annotation = Some(annotation);
                     continue;
                 }
 
-                if let Some(method) = self.next_topic_method_opt()? {
-                    methods.push(method);
-                    continue;
+                // 尝试解析 method，失败时跳过
+                match self.next_topic_method_opt() {
+                    Ok(Some(method)) => {
+                        methods.push(method);
+                        continue;
+                    }
+                    Ok(None) => {
+                        // 无法解析，跳过当前 token
+                        let _ = self.tokenizer.advance();
+                    }
+                    Err(e) => {
+                        let start_loc = self.tokenizer.loc();
+                        self.skip_to_sync_point_in_message();
+                        self.store_error_diagnostics(
+                            format!("subscribe 方法解析错误: {}", e),
+                            start_loc,
+                            self.tokenizer.loc(),
+                        );
+                    }
                 }
-
-                return Err(ParserError::IncorrectInput.into());
             }
-            self.tokenizer.next_symbol_expect_eq('}', "subscribe")?;
+
+            let _ = self.tokenizer.next_symbol_expect_eq('}', "subscribe");
             Ok(Some(WithLoc {
                 loc,
                 t: SubscribeTopic {
@@ -1810,9 +2095,36 @@ impl<'a> Parser<'a> {
             //     options.push(option);
             //     continue;
             // }
-            if let Some(message) = self.next_message_opt()? {
-                messages.push(message);
-                continue;
+
+            // 尝试解析 message，遇到错误时继续
+            let msg_loc = self.tokenizer.lookahead_loc();
+            match self.next_message_opt() {
+                Ok(Some(message)) => {
+                    messages.push(message);
+                    continue;
+                }
+                Ok(None) => {
+                    // 检查是否是因为检测到了 "message" 关键字但解析失败
+                    // 如果当前位置向前移动了，说明已经处理了一些内容
+                    let new_loc = self.tokenizer.loc();
+                    if new_loc.line > msg_loc.line || (new_loc.line == msg_loc.line && new_loc.col > msg_loc.col) {
+                        // 已经跳过了一些内容��继续下一次循环
+                        continue;
+                    }
+                    // 否则继续尝试解析其他结构
+                }
+                Err(e) => {
+                    // 记录错误并跳过当前 token
+                    let loc = self.tokenizer.loc();
+                    self.store_error_diagnostics(
+                        format!("解析 message 出错: {}", e),
+                        loc,
+                        self.tokenizer.loc(),
+                    );
+                    // 跳过当前 token 继续解析
+                    let _ = self.tokenizer.advance();
+                    continue;
+                }
             }
 
             if let Some(event) = self.next_event_opt()? {
@@ -1847,7 +2159,8 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
-            return Err(ParserError::IncorrectInput.into());
+            // 跳过无法识别的 token，继续解析
+            let _ = self.tokenizer.advance();
         }
 
         let scope = self.scope_stack.pop().unwrap();
