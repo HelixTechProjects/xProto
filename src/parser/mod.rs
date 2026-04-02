@@ -73,7 +73,10 @@ pub fn convert_to_snake_case(input: &str) -> String {
 }
 
 pub fn get_package_name_from_file_name<T: AsRef<str>>(file_name: T) -> String {
-    let package_name = file_name.as_ref().replace(".proto", "").replace(".xproto", "");
+    let package_name = file_name
+        .as_ref()
+        .replace(".proto", "")
+        .replace(".xproto", "");
     let package_name = package_name.replace("import-api-", "");
     let package_name = convert_to_snake_case(&package_name);
     package_name.replace(".", "_").replace("-", "_")

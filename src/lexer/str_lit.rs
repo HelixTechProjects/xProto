@@ -25,9 +25,8 @@ impl fmt::Display for StrLit {
 }
 
 impl StrLit {
-
-      /// May fail if not valid UTF8
-      pub fn decode_utf8(&self) -> StrLitDecodeResult<String> {
+    /// May fail if not valid UTF8
+    pub fn decode_utf8(&self) -> StrLitDecodeResult<String> {
         let mut lexer = Lexer::new(&self.escaped);
         let mut r = Vec::new();
         while !lexer.eof() {

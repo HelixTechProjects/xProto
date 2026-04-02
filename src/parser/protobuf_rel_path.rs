@@ -9,8 +9,6 @@ use super::protobuf_abs_path::ProtobufAbsPath;
 use super::protobuf_ident::ProtobufIdent;
 use super::protobuf_ident::ProtobufIdentRef;
 
-
-
 impl From<String> for ProtobufRelPath {
     fn from(s: String) -> ProtobufRelPath {
         ProtobufRelPath::new(s)

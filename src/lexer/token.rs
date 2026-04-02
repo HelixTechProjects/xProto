@@ -43,9 +43,6 @@ impl Token {
             _ => Err(LexerError::IncorrectInput),
         }
     }
-    
-
-
 }
 
 #[derive(Clone, Debug)]

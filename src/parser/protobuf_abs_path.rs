@@ -4,12 +4,10 @@ use std::fmt;
 use std::mem;
 use std::ops::Deref;
 
-
 use super::protobuf_ident::ProtobufIdent;
 use super::protobuf_ident::ProtobufIdentRef;
 use super::protobuf_rel_path::ProtobufRelPath;
 use super::protobuf_rel_path::ProtobufRelPathRef;
-
 
 /// Protobuf absolute name (e. g. `.foo.Bar`).
 #[derive(Clone, Eq, PartialEq, Debug, Hash)]
@@ -164,8 +162,6 @@ impl ProtobufAbsPath {
         }
     }
 
-
-
     pub fn concat(a: &ProtobufAbsPathRef, b: &ProtobufRelPathRef) -> ProtobufAbsPath {
         let mut a = a.to_owned();
         a.push_relative(b);
@@ -263,4 +259,3 @@ impl fmt::Display for ProtobufAbsPath {
         write!(f, "{}", ProtobufAbsPathRef::new(&self.0))
     }
 }
-

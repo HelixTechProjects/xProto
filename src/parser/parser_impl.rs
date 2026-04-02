@@ -14,8 +14,8 @@ use crate::parser::{
     read_file_as_string,
 };
 
-use std::result::Result::Ok;
 use regex::Regex;
+use std::result::Result::Ok;
 
 use super::model::{
     AnyTypeUrl, EnumValue, Enumeration, Event, EventItem, Extension, Field, FieldOrOneOf,
@@ -1176,7 +1176,10 @@ impl<'a> Parser<'a> {
                 Ok(field_with_loc) => {
                     if !field_num_set.contains(&field_with_loc.t.number) {
                         field_num_set.insert(field_with_loc.t.number);
-                        r.fields.push(WithLoc { t: FieldOrOneOf::Field(field_with_loc), loc });
+                        r.fields.push(WithLoc {
+                            t: FieldOrOneOf::Field(field_with_loc),
+                            loc,
+                        });
                     }
                 }
                 Err(e) => {
@@ -2107,7 +2110,9 @@ impl<'a> Parser<'a> {
                     // 检查是否是因为检测到了 "message" 关键字但解析失败
                     // 如果当前位置向前移动了，说明已经处理了一些内容
                     let new_loc = self.tokenizer.loc();
-                    if new_loc.line > msg_loc.line || (new_loc.line == msg_loc.line && new_loc.col > msg_loc.col) {
+                    if new_loc.line > msg_loc.line
+                        || (new_loc.line == msg_loc.line && new_loc.col > msg_loc.col)
+                    {
                         // 已经跳过了一些内容��继续下一次循环
                         continue;
                     }

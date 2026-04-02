@@ -289,7 +289,6 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-
     pub fn skip_pair_symbol(&mut self, symbol: char) -> TokenizerResult<()> {
         let start_symbol = if symbol == '}' {
             '{'
@@ -318,7 +317,6 @@ impl<'a> Tokenizer<'a> {
             }
             let _ = self.advance()?;
             if skip_num <= 0 {
-               
                 break;
             }
         }
