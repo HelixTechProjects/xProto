@@ -1,4 +1,5 @@
-use crate::lexer::{lexer_impl::Lexer, token::Token};
+use crate::lexer::lexer_impl::Lexer;
+use crate::lexer::token::Token;
 
 fn trim_last_empty_line(s: &mut String) {
     if let Some(pos) = s.rfind('\n') {

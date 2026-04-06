@@ -1,9 +1,10 @@
-use super::{
-    lexer_impl::{Lexer, LexerError},
-    loc::Loc,
-    str_lit::{StrLit, StrLitDecodeError},
-    token::{Token, TokenWithLocation},
-};
+use super::lexer_impl::Lexer;
+use super::lexer_impl::LexerError;
+use super::loc::Loc;
+use super::str_lit::StrLit;
+use super::str_lit::StrLitDecodeError;
+use super::token::Token;
+use super::token::TokenWithLocation;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TokenizerError {

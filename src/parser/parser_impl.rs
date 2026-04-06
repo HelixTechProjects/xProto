@@ -1,4 +1,5 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ops::RangeInclusive;
 use std::str;
 
@@ -8,22 +9,42 @@ use crate::lexer::loc::Loc;
 use crate::lexer::num_lit::NumLit;
 use crate::lexer::str_lit::StrLitDecodeError;
 use crate::lexer::token::Token;
-use crate::lexer::tokenizer::{Tokenizer, TokenizerError};
-use crate::parser::{
-    get_file_name_from_path, get_import_file_absoule_path, get_package_name_from_file_name,
-    read_file_as_string,
-};
+use crate::lexer::tokenizer::Tokenizer;
+use crate::lexer::tokenizer::TokenizerError;
+use crate::parser::get_file_name_from_path;
+use crate::parser::get_import_file_absoule_path;
+use crate::parser::get_package_name_from_file_name;
+use crate::parser::read_file_as_string;
 
 use regex::Regex;
 use std::result::Result::Ok;
 
-use super::model::{
-    AnyTypeUrl, EnumValue, Enumeration, Event, EventItem, Extension, Field, FieldOrOneOf,
-    FieldType, FileDescriptor, Message, Method, ProtobufAnntation, ProtobufConstant,
-    ProtobufConstantMessage, ProtobufConstantMessageFieldName, ProtobufOption, ProtobufOptionName,
-    ProtobufOptionNameExt, ProtobufOptionNamePart, Rule, Service, SubscribeTopic, Syntax, Topic,
-    WithLoc,
-};
+use super::model::AnyTypeUrl;
+use super::model::EnumValue;
+use super::model::Enumeration;
+use super::model::Event;
+use super::model::EventItem;
+use super::model::Extension;
+use super::model::Field;
+use super::model::FieldOrOneOf;
+use super::model::FieldType;
+use super::model::FileDescriptor;
+use super::model::Message;
+use super::model::Method;
+use super::model::ProtobufAnntation;
+use super::model::ProtobufConstant;
+use super::model::ProtobufConstantMessage;
+use super::model::ProtobufConstantMessageFieldName;
+use super::model::ProtobufOption;
+use super::model::ProtobufOptionName;
+use super::model::ProtobufOptionNameExt;
+use super::model::ProtobufOptionNamePart;
+use super::model::Rule;
+use super::model::Service;
+use super::model::SubscribeTopic;
+use super::model::Syntax;
+use super::model::Topic;
+use super::model::WithLoc;
 
 use super::protobuf_ident::ProtobufIdent;
 use super::protobuf_path::ProtobufPath;

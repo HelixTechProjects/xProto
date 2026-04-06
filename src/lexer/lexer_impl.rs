@@ -1,11 +1,13 @@
-use std::num::{ParseFloatError, ParseIntError};
+use std::num::ParseFloatError;
+use std::num::ParseIntError;
 
-use super::{
-    float::{self, ProtobufFloatParseError},
-    loc::{Loc, FIRST_COL},
-    str_lit::StrLit,
-    token::{Token, TokenWithLocation},
-};
+use super::float::ProtobufFloatParseError;
+use super::float::{self};
+use super::loc::Loc;
+use super::loc::FIRST_COL;
+use super::str_lit::StrLit;
+use super::token::Token;
+use super::token::TokenWithLocation;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LexerError {

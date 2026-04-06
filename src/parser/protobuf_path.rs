@@ -1,6 +1,7 @@
 use std::fmt;
 
-use super::{protobuf_abs_path::ProtobufAbsPath, protobuf_rel_path::ProtobufRelPath};
+use super::protobuf_abs_path::ProtobufAbsPath;
+use super::protobuf_rel_path::ProtobufRelPath;
 
 /// Protobuf identifier can be absolute or relative.
 #[derive(Debug, Eq, PartialEq, Clone, Hash)]
