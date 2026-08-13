@@ -960,6 +960,13 @@ impl<'a> Parser<'a> {
 
             // 解析 enum body（带错误恢复）
             while self.tokenizer.lookahead_if_symbol().unwrap_or(None) != Some('}') {
+                // 到文件末尾必须退出。lookahead_if_symbol() 在 EOF 返回 Err，
+                // 被 unwrap_or(None) 吞成 None 之后 `None != Some('}')` 恒真，
+                // 循环就再也出不来；而下面出错分支每轮都会 push 一条诊断，
+                // 表现为 CPU 打满 + 内存无限涨（源文件少一个 '}' 就会触发）。
+                if self.tokenizer.syntax_eof().unwrap_or(true) {
+                    break;
+                }
                 match self.next_annotation_opt() {
                     Ok(Some(annotation)) => {
                         self.annotation = Some(annotation);
@@ -1148,6 +1155,10 @@ impl<'a> Parser<'a> {
 
         let mut field_num_set = HashSet::new();
         while self.tokenizer.lookahead_if_symbol().unwrap_or(None) != Some('}') {
+            // EOF 必须退出，理由同 enum body 那处
+            if self.tokenizer.syntax_eof().unwrap_or(true) {
+                break;
+            }
             let loc = self.tokenizer.lookahead_loc();
 
             // 尝试解析，如果失败则跳过当前项
@@ -1373,6 +1384,10 @@ impl<'a> Parser<'a> {
             let mut event_items = Vec::new();
             // 解析 event body（带错误恢复）
             while self.tokenizer.lookahead_if_symbol().unwrap_or(None) != Some('}') {
+                // EOF 必须退出，理由同 enum body 那处
+                if self.tokenizer.syntax_eof().unwrap_or(true) {
+                    break;
+                }
                 if let Ok(Some(annotation)) = self.next_annotation_opt() {
                     self.annotation = Some(annotation);
                     continue;
@@ -1734,6 +1749,10 @@ impl<'a> Parser<'a> {
 
             // 解析 topic body（带错误恢复）
             while self.tokenizer.lookahead_if_symbol().unwrap_or(None) != Some('}') {
+                // EOF 必须退出，理由同 enum body 那处
+                if self.tokenizer.syntax_eof().unwrap_or(true) {
+                    break;
+                }
                 if let Ok(Some(annotation)) = self.next_annotation_opt() {
                     self.annotation = Some(annotation);
                     continue;
@@ -1825,6 +1844,10 @@ impl<'a> Parser<'a> {
 
             // 解析 subscribe body（带错误恢复）
             while self.tokenizer.lookahead_if_symbol().unwrap_or(None) != Some('}') {
+                // EOF 必须退出，理由同 enum body 那处
+                if self.tokenizer.syntax_eof().unwrap_or(true) {
+                    break;
+                }
                 if let Ok(Some(annotation)) = self.next_annotation_opt() {
                     self.annotation = Some(annotation);
                     continue;
